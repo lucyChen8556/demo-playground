@@ -8,9 +8,8 @@ import {
   sanitizeNumericInput,
   sanitizeDigitsOnly,
   sanitizePositiveInt,
-  trimNumericLeadingZerosOnBlur,
   trimNumericOnBlur,
-} from '../InputUtils';
+} from './utils/InputUtils';
 
 type BlurFlags = {
   leadingZeros: boolean;
@@ -200,6 +199,14 @@ function runBlur(value: string, options: PlaygroundOptions): string {
   return trimNumericOnBlur(value, options.blur);
 }
 
+function buildKeyDownOptions(options: PlaygroundOptions) {
+  return {
+    exponent: options.exponent,
+    sign: options.sign,
+    replaceLeadingZero: options.replaceLeadingZero,
+  };
+}
+
 function scenarioById(id: ScenarioKind): Scenario {
   return SCENARIOS.find((scenario) => scenario.id === id) ?? SCENARIOS[0];
 }
@@ -271,7 +278,7 @@ export default function App() {
     } else if (scenarioId === 'int') {
       integerInputKeyDown(event);
     } else {
-      numericLiteralInputKeyDown(event, buildNumericOptions(controls));
+      numericLiteralInputKeyDown(event, buildKeyDownOptions(controls));
     }
 
     setKeydownReport({
@@ -282,7 +289,13 @@ export default function App() {
 
   const handlePaste = (event: ClipboardEvent<HTMLInputElement>) => {
     const pastedText = event.clipboardData.getData('text');
-    const sanitizedVal = pastePreviewByScenario(scenarioId, pastedText, controls);
+    const currentValue = event.currentTarget.value ?? '';
+    const start = event.currentTarget.selectionStart ?? currentValue.length;
+    const end = event.currentTarget.selectionEnd ?? currentValue.length;
+    const candidateRawValue = `${currentValue.slice(0, start)}${pastedText}${currentValue.slice(end)}`;
+    const sanitizedVal = scenarioId === 'text'
+      ? candidateRawValue
+      : sanitizeByScenario(scenarioId, candidateRawValue, controls, candidateRawValue);
 
     if (sanitizedVal === '') {
       event.preventDefault();
@@ -306,16 +319,12 @@ export default function App() {
   const handleBlur = () => {
     if (scenarioId === 'text') {
       setBlurResult(inputValue);
-      setRawValue(inputValue);
       return;
     }
 
-    const trimmed = controls.blur.leadingZeros
-      ? trimNumericLeadingZerosOnBlur(String(inputValue || ''))
-      : runBlur(sanitizeResult || inputValue, controls);
+    const trimmed = runBlur(String(inputValue || ''), controls);
     setBlurResult(trimmed);
     setInputValue(trimmed);
-    setRawValue(trimmed);
     setSanitizeResult(trimmed);
   };
 

@@ -33,7 +33,7 @@ function shouldPreserveLeadingZeroProgress(previousValue: string | number, nextV
     return true;
   }
 
-  if (/^0[\d.]+$/.test(previous)) {
+  if (/^0[\d.]*$/.test(previous) && nextValue === `0${previous}`) {
     return true;
   }
 
@@ -239,6 +239,10 @@ export function sanitizeNumericInputHandler(
   }
 
   if (previous && shouldPreserveLeadingZeroProgress(previous, s)) {
+    return s;
+  }
+
+  if (allowDecimal && /^0\d*$/.test(s)) {
     return s;
   }
 
