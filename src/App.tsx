@@ -1,10 +1,14 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ClipboardEvent, ChangeEvent, KeyboardEvent } from 'react';
 
 import {
-  applyNumericLiteralKeyDown,
-  applyNumericLiteralPaste,
+  digitInputKeyDown,
+  integerInputKeyDown,
+  numericLiteralInputKeyDown,
   sanitizeNumericInput,
+  sanitizeDigitsOnly,
+  sanitizePositiveInt,
+  trimNumericLeadingZerosOnBlur,
   trimNumericOnBlur,
 } from '../InputUtils';
 
@@ -28,20 +32,108 @@ type EventReport = {
   detail: string;
 };
 
-const SAMPLE_VALUES = ['0', '00', '0012.3400', '.5', '-.75', '1e3', '1e-3', '12..3', '--1', 'abc12.3kg'];
+type ScenarioKind = 'int' | 'decimal' | 'digital' | 'text';
 
-const defaultOptions: PlaygroundOptions = {
-  decimal: '2',
-  exponent: false,
-  sign: false,
-  replaceLeadingZero: false,
-  min: '0',
-  blur: {
-    leadingZeros: true,
-    leadingDecimalPoint: true,
-    trailingFractionZeros: false,
-  },
+type Scenario = {
+  id: ScenarioKind;
+  label: string;
+  description: string;
+  inputMode: 'numeric' | 'decimal' | 'text';
+  placeholder: string;
+  unit?: string;
+  samples: string[];
+  options: PlaygroundOptions;
 };
+
+const defaultEventReport = (detail: string): EventReport => ({
+  label: 'waiting',
+  detail,
+});
+
+const SCENARIOS: Scenario[] = [
+  {
+    id: 'int',
+    label: 'Int',
+    description: 'Positive integer style input. Uses current integer handler and integer sanitize flow.',
+    inputMode: 'numeric',
+    placeholder: '0, 12, 300',
+    unit: 'pcs',
+    samples: ['0', '00', '007', '12', 'abc12', '-15'],
+    options: {
+      decimal: '0',
+      exponent: false,
+      sign: false,
+      replaceLeadingZero: true,
+      min: '0',
+      blur: {
+        leadingZeros: true,
+        leadingDecimalPoint: false,
+        trailingFractionZeros: false,
+      },
+    },
+  },
+  {
+    id: 'decimal',
+    label: 'decimal',
+    description: 'Decimal input wired like your sample: numeric literal keydown, sanitize on change, trim on blur.',
+    inputMode: 'decimal',
+    placeholder: '12.34',
+    unit: 'kg',
+    samples: ['0', '00', '0012.3400', '.5', '12.3456', 'abc12.3kg'],
+    options: {
+      decimal: '2',
+      exponent: false,
+      sign: false,
+      replaceLeadingZero: false,
+      min: '0',
+      blur: {
+        leadingZeros: true,
+        leadingDecimalPoint: true,
+        trailingFractionZeros: false,
+      },
+    },
+  },
+  {
+    id: 'digital',
+    label: 'digital',
+    description: 'Digits-only input. Keeps leading zeros like 00 and does not trim them on blur.',
+    inputMode: 'numeric',
+    placeholder: '123456',
+    samples: ['00123', 'abc12', '12.34', '-56', '9e3', 'room42'],
+    options: {
+      decimal: '0',
+      exponent: false,
+      sign: false,
+      replaceLeadingZero: false,
+      min: '0',
+      blur: {
+        leadingZeros: false,
+        leadingDecimalPoint: false,
+        trailingFractionZeros: false,
+      },
+    },
+  },
+  {
+    id: 'text',
+    label: 'text',
+    description: 'No numeric logic applied. Useful as a control group against the other scenarios.',
+    inputMode: 'text',
+    placeholder: 'Anything goes',
+    samples: ['0123', '0.123', 'abc-12.3kg', '1e-3', '--', 'room 42'],
+    options: {
+      decimal: '',
+      exponent: false,
+      sign: false,
+      replaceLeadingZero: false,
+      min: '',
+      blur: {
+        leadingZeros: false,
+        leadingDecimalPoint: false,
+        trailingFractionZeros: false,
+      },
+    },
+  },
+];
 
 function toDecimalOption(decimal: string): number | undefined {
   if (decimal.trim() === '') {
@@ -61,7 +153,7 @@ function toMinOption(min: string): number | undefined {
   return Number.isNaN(parsed) ? undefined : parsed;
 }
 
-function buildOptions(options: PlaygroundOptions, previousValue?: string) {
+function buildNumericOptions(options: PlaygroundOptions, previousValue?: string) {
   return {
     min: toMinOption(options.min),
     decimal: toDecimalOption(options.decimal),
@@ -72,29 +164,81 @@ function buildOptions(options: PlaygroundOptions, previousValue?: string) {
   };
 }
 
-function buildPreview(rawValue: string, options: PlaygroundOptions) {
-  const sanitized = sanitizeNumericInput(rawValue, buildOptions(options));
-  const blurred = trimNumericOnBlur(sanitized, options.blur);
+function sanitizeByScenario(kind: ScenarioKind, value: string, options: PlaygroundOptions, previousValue?: string): string {
+  if (kind === 'text') {
+    return value;
+  }
 
-  return { sanitized, blurred };
+  if (kind === 'digital') {
+    return sanitizeDigitsOnly(value);
+  }
+
+  if (kind === 'int') {
+    return sanitizePositiveInt(value, toMinOption(options.min), previousValue);
+  }
+
+  return sanitizeNumericInput(value, buildNumericOptions(options, previousValue));
+}
+
+function pastePreviewByScenario(kind: ScenarioKind, pastedText: string, options: PlaygroundOptions): string {
+  if (kind === 'text') {
+    return pastedText;
+  }
+
+  if (kind === 'digital') {
+    return sanitizeDigitsOnly(pastedText);
+  }
+
+  if (kind === 'int') {
+    return sanitizePositiveInt(pastedText, toMinOption(options.min));
+  }
+
+  return sanitizeNumericInput(pastedText, buildNumericOptions(options));
+}
+
+function runBlur(value: string, options: PlaygroundOptions): string {
+  return trimNumericOnBlur(value, options.blur);
+}
+
+function scenarioById(id: ScenarioKind): Scenario {
+  return SCENARIOS.find((scenario) => scenario.id === id) ?? SCENARIOS[0];
 }
 
 export default function App() {
-  const [controls, setControls] = useState<PlaygroundOptions>(defaultOptions);
+  const [scenarioId, setScenarioId] = useState<ScenarioKind>('decimal');
+  const [controls, setControls] = useState<PlaygroundOptions>(scenarioById('decimal').options);
   const [inputValue, setInputValue] = useState('');
   const [rawValue, setRawValue] = useState('');
   const [sanitizeResult, setSanitizeResult] = useState('');
   const [blurResult, setBlurResult] = useState('');
-  const [keydownReport, setKeydownReport] = useState<EventReport>({
-    label: 'waiting',
-    detail: 'Press a key to inspect the decision.',
-  });
-  const [pasteReport, setPasteReport] = useState<EventReport>({
-    label: 'waiting',
-    detail: 'Paste text to inspect the result.',
-  });
+  const [keydownReport, setKeydownReport] = useState<EventReport>(defaultEventReport('Press a key to inspect the decision.'));
+  const [pasteReport, setPasteReport] = useState<EventReport>(defaultEventReport('Paste text to inspect the result.'));
 
-  const livePreview = buildPreview(rawValue, controls);
+  const activeScenario = useMemo(() => scenarioById(scenarioId), [scenarioId]);
+  const livePreview = useMemo(
+    () => ({
+      sanitized: sanitizeByScenario(scenarioId, rawValue, controls),
+      blurred: runBlur(sanitizeByScenario(scenarioId, rawValue, controls), controls),
+    }),
+    [controls, rawValue, scenarioId],
+  );
+
+  const resetReports = () => {
+    setKeydownReport(defaultEventReport('Press a key to inspect the decision.'));
+    setPasteReport(defaultEventReport('Paste text to inspect the result.'));
+  };
+
+  const applyScenario = (nextScenarioId: ScenarioKind) => {
+    const nextScenario = scenarioById(nextScenarioId);
+
+    setScenarioId(nextScenarioId);
+    setControls(nextScenario.options);
+    setInputValue('');
+    setRawValue('');
+    setSanitizeResult('');
+    setBlurResult('');
+    resetReports();
+  };
 
   const setFlag = (key: keyof PlaygroundOptions, value: boolean | string) => {
     setControls((current) => ({
@@ -114,7 +258,21 @@ export default function App() {
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    applyNumericLiteralKeyDown(event, buildOptions(controls));
+    if (scenarioId === 'text') {
+      setKeydownReport({
+        label: 'allowed',
+        detail: `key "${event.key}" on "${event.currentTarget.value}"`,
+      });
+      return;
+    }
+
+    if (scenarioId === 'digital') {
+      digitInputKeyDown(event);
+    } else if (scenarioId === 'int') {
+      integerInputKeyDown(event);
+    } else {
+      numericLiteralInputKeyDown(event, buildNumericOptions(controls));
+    }
 
     setKeydownReport({
       label: event.defaultPrevented ? 'blocked' : 'allowed',
@@ -123,24 +281,22 @@ export default function App() {
   };
 
   const handlePaste = (event: ClipboardEvent<HTMLInputElement>) => {
-    const beforeValue = event.currentTarget.value;
     const pastedText = event.clipboardData.getData('text');
+    const sanitizedVal = pastePreviewByScenario(scenarioId, pastedText, controls);
 
-    applyNumericLiteralPaste(event, buildOptions(controls));
+    if (sanitizedVal === '') {
+      event.preventDefault();
+    }
 
-    requestAnimationFrame(() => {
-      const afterValue = event.currentTarget.value;
-      const label = event.defaultPrevented ? (afterValue === beforeValue ? 'blocked' : 'rewritten') : 'allowed';
-      setPasteReport({
-        label,
-        detail: `"${pastedText}" -> "${afterValue}"`,
-      });
+    setPasteReport({
+      label: sanitizedVal === '' ? 'blocked' : 'allowed',
+      detail: `"${pastedText}" -> "${sanitizedVal}"`,
     });
   };
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     const nextRawValue = event.target.value;
-    const sanitized = sanitizeNumericInput(nextRawValue, buildOptions(controls, inputValue));
+    const sanitized = sanitizeByScenario(scenarioId, String(nextRawValue ?? ''), controls, nextRawValue || '');
 
     setInputValue(sanitized);
     setRawValue(nextRawValue);
@@ -148,7 +304,15 @@ export default function App() {
   };
 
   const handleBlur = () => {
-    const trimmed = trimNumericOnBlur(sanitizeResult || inputValue, controls.blur);
+    if (scenarioId === 'text') {
+      setBlurResult(inputValue);
+      setRawValue(inputValue);
+      return;
+    }
+
+    const trimmed = controls.blur.leadingZeros
+      ? trimNumericLeadingZerosOnBlur(String(inputValue || ''))
+      : runBlur(sanitizeResult || inputValue, controls);
     setBlurResult(trimmed);
     setInputValue(trimmed);
     setRawValue(trimmed);
@@ -156,13 +320,14 @@ export default function App() {
   };
 
   const injectSample = (sample: string) => {
-    const sanitized = sanitizeNumericInput(sample, buildOptions(controls));
-    const trimmed = trimNumericOnBlur(sanitized, controls.blur);
+    const sanitized = sanitizeByScenario(scenarioId, sample, controls);
+    const trimmed = runBlur(sanitized, controls);
 
     setInputValue(sanitized);
     setRawValue(sample);
     setSanitizeResult(sanitized);
     setBlurResult(trimmed);
+    resetReports();
   };
 
   return (
@@ -171,54 +336,90 @@ export default function App() {
         <p className="eyebrow">numeric-input-playground</p>
         <h1>Numeric Input Playground</h1>
         <p className="hero-copy">
-          Toggle parser rules on the left, type in the middle, and watch keydown, paste, sanitize, and blur outcomes on
-          the right.
+          Switch between realistic input types, then inspect how keydown, paste, sanitize, and blur behave for each one.
         </p>
+      </section>
+
+      <section className="panel scenario-panel">
+        <div className="panel-header">
+          <h2>Scenario</h2>
+          <p>Different type means a different input setup, not just a different sample value.</p>
+        </div>
+
+        <div className="scenario-list">
+          {SCENARIOS.map((scenario) => (
+            <button
+              key={scenario.id}
+              type="button"
+              className={`scenario-card${scenario.id === scenarioId ? ' scenario-card-active' : ''}`}
+              onClick={() => applyScenario(scenario.id)}
+            >
+              <strong>{scenario.label}</strong>
+              <span>{scenario.description}</span>
+            </button>
+          ))}
+        </div>
       </section>
 
       <section className="workspace-grid">
         <aside className="panel controls-panel">
           <div className="panel-header">
             <h2>Controls</h2>
-            <p>Keep this tight and focused on numeric edge cases.</p>
+            <p>Tune the active scenario without touching the shared numeric logic.</p>
           </div>
 
-          <label className="field">
-            <span>Max decimal places</span>
-            <input
-              value={controls.decimal}
-              onChange={(event) => setFlag('decimal', event.target.value)}
-              placeholder="empty = unlimited"
-            />
-          </label>
+          <div className="fieldset fieldset-first">
+            <p>Active input config</p>
 
-          <label className="field">
-            <span>Min</span>
-            <input value={controls.min} onChange={(event) => setFlag('min', event.target.value)} placeholder="0" />
-          </label>
+            <label className="field">
+              <span>Input mode</span>
+              <input value={activeScenario.inputMode} disabled />
+            </label>
 
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={controls.exponent}
-              onChange={(event) => setFlag('exponent', event.target.checked)}
-            />
-            <span>allow exponent</span>
-          </label>
+            <label className="field">
+              <span>Max decimal places</span>
+              <input
+                value={controls.decimal}
+                onChange={(event) => setFlag('decimal', event.target.value)}
+                placeholder="empty = unlimited"
+                disabled={scenarioId === 'int' || scenarioId === 'digital' || scenarioId === 'text'}
+              />
+            </label>
 
-          <label className="toggle">
-            <input type="checkbox" checked={controls.sign} onChange={(event) => setFlag('sign', event.target.checked)} />
-            <span>allow sign</span>
-          </label>
+            <label className="field">
+              <span>Min</span>
+              <input value={controls.min} onChange={(event) => setFlag('min', event.target.value)} placeholder="0" />
+            </label>
 
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={controls.replaceLeadingZero}
-              onChange={(event) => setFlag('replaceLeadingZero', event.target.checked)}
-            />
-            <span>replace leading zero</span>
-          </label>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={controls.exponent}
+                onChange={(event) => setFlag('exponent', event.target.checked)}
+                disabled={scenarioId === 'int' || scenarioId === 'digital' || scenarioId === 'text'}
+              />
+              <span>allow exponent</span>
+            </label>
+
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={controls.sign}
+                onChange={(event) => setFlag('sign', event.target.checked)}
+                disabled={scenarioId === 'int' || scenarioId === 'digital' || scenarioId === 'text'}
+              />
+              <span>allow sign</span>
+            </label>
+
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={controls.replaceLeadingZero}
+                onChange={(event) => setFlag('replaceLeadingZero', event.target.checked)}
+              />
+              <span>replace leading zero</span>
+            </label>
+          </div>
 
           <div className="fieldset">
             <p>Blur trim flags</p>
@@ -251,27 +452,36 @@ export default function App() {
 
         <section className="panel input-panel">
           <div className="panel-header">
-            <h2>Input sample</h2>
-            <p>Real typing path with your shared numeric utils.</p>
+            <h2>{activeScenario.label}</h2>
+            <p>{activeScenario.description}</p>
           </div>
 
           <div className="input-card">
+            <div className="input-meta">
+              <span className="meta-chip">type="text"</span>
+              <span className="meta-chip">inputMode="{activeScenario.inputMode}"</span>
+              {activeScenario.unit ? <span className="meta-chip">unit="{activeScenario.unit}"</span> : null}
+            </div>
+
             <label className="field">
               <span>Try input</span>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={inputValue}
-                onKeyDown={handleKeyDown}
-                onPaste={handlePaste}
-                onChange={handleChange}
-                onBlur={handleBlur}
-                placeholder="Type something like 0012.3400 or 1e-3"
-              />
+              <div className="input-with-unit">
+                <input
+                  type="text"
+                  inputMode={activeScenario.inputMode}
+                  value={inputValue}
+                  onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
+                  onChange={handleChange}
+                  onBlur={handleBlur}
+                  placeholder={activeScenario.placeholder}
+                />
+                {activeScenario.unit ? <span className="input-unit">{activeScenario.unit}</span> : null}
+              </div>
             </label>
 
             <div className="sample-group">
-              {SAMPLE_VALUES.map((sample) => (
+              {activeScenario.samples.map((sample) => (
                 <button key={sample} type="button" className="sample-chip" onClick={() => injectSample(sample)}>
                   {sample}
                 </button>
@@ -283,12 +493,22 @@ export default function App() {
         <aside className="panel output-panel">
           <div className="panel-header">
             <h2>Live output</h2>
-            <p>Inspect the exact state transitions you care about.</p>
+            <p>See both the raw event value and the controlled value path.</p>
+          </div>
+
+          <div className="metric">
+            <span className="metric-label">active scenario</span>
+            <code>{activeScenario.id}</code>
           </div>
 
           <div className="metric">
             <span className="metric-label">raw value</span>
             <code>{rawValue || '""'}</code>
+          </div>
+
+          <div className="metric">
+            <span className="metric-label">input rendered value</span>
+            <code>{inputValue || '""'}</code>
           </div>
 
           <div className="metric">

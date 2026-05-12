@@ -24,6 +24,10 @@ input {
   font: inherit;
 }
 
+button {
+  font-family: inherit;
+}
+
 code {
   font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
 }
@@ -66,6 +70,10 @@ code {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr) 360px;
   gap: 18px;
+}
+
+.scenario-panel {
+  margin-bottom: 18px;
 }
 
 .panel {
@@ -141,13 +149,87 @@ code {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.fieldset-first {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
 .fieldset p {
   margin: 0 0 12px;
+}
+
+.scenario-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.scenario-card {
+  display: grid;
+  gap: 6px;
+  text-align: left;
+  padding: 14px;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  cursor: pointer;
+  transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+
+.scenario-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(230, 165, 76, 0.42);
+}
+
+.scenario-card span {
+  color: rgba(245, 239, 228, 0.64);
+  font-size: 0.9rem;
+}
+
+.scenario-card-active {
+  background: rgba(230, 165, 76, 0.12);
+  border-color: rgba(230, 165, 76, 0.72);
 }
 
 .input-card {
   display: grid;
   gap: 18px;
+}
+
+.input-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.meta-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(127, 201, 255, 0.12);
+  border: 1px solid rgba(127, 201, 255, 0.18);
+  color: rgba(245, 239, 228, 0.8);
+  font-size: 0.86rem;
+}
+
+.input-with-unit {
+  position: relative;
+}
+
+.input-with-unit input {
+  padding-right: 56px;
+}
+
+.input-unit {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  transform: translateY(-50%);
+  color: rgba(245, 239, 228, 0.6);
+  font-size: 0.9rem;
 }
 
 .sample-group {
@@ -211,7 +293,17 @@ code {
 }
 
 @media (max-width: 1120px) {
+  .scenario-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .scenario-list {
     grid-template-columns: 1fr;
   }
 }
