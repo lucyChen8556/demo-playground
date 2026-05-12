@@ -25,6 +25,16 @@ export type NumericInputOptions = {
   replaceLeadingZero?: boolean;
 };
 
+export const numericBlurPreset: NumericBlurTrimOptions = {
+  leadingZeros: true,
+  leadingDecimalPoint: true,
+  trailingDecimalPoint: true,
+};
+
+export const integerBlurPreset: NumericBlurTrimOptions = {
+  leadingZeros: true,
+};
+
 function toNumericKeyDownOptions(options?: NumericInputOptions): NumericKeyDownOptions {
   return {
     allowDecimal: true,

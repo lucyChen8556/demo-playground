@@ -14,6 +14,7 @@ import {
 type BlurFlags = {
   leadingZeros: boolean;
   leadingDecimalPoint: boolean;
+  trailingDecimalPoint: boolean;
   trailingFractionZeros: boolean;
 };
 
@@ -29,6 +30,8 @@ type PlaygroundOptions = {
 type EventReport = {
   label: string;
   detail: string;
+  candidateNextValue?: string;
+  reason?: string;
 };
 
 type ScenarioKind = 'int' | 'decimal' | 'digital' | 'text';
@@ -42,11 +45,19 @@ type Scenario = {
   unit?: string;
   samples: string[];
   options: PlaygroundOptions;
+  bindings: {
+    keydown: string;
+    paste: string;
+    change: string;
+    blur: string;
+  };
 };
 
 const defaultEventReport = (detail: string): EventReport => ({
   label: 'waiting',
   detail,
+  candidateNextValue: '',
+  reason: '',
 });
 
 const SCENARIOS: Scenario[] = [
@@ -67,8 +78,15 @@ const SCENARIOS: Scenario[] = [
       blur: {
         leadingZeros: true,
         leadingDecimalPoint: false,
+        trailingDecimalPoint: false,
         trailingFractionZeros: false,
       },
+    },
+    bindings: {
+      keydown: 'integerInputKeyDown(event)',
+      paste: 'sanitizePositiveInt(candidateRawValue, min)',
+      change: 'sanitizePositiveInt(nextRawValue, min, previousValue)',
+      blur: 'trimNumericOnBlur(value, blurFlags)',
     },
   },
   {
@@ -88,8 +106,15 @@ const SCENARIOS: Scenario[] = [
       blur: {
         leadingZeros: true,
         leadingDecimalPoint: true,
+        trailingDecimalPoint: true,
         trailingFractionZeros: false,
       },
+    },
+    bindings: {
+      keydown: 'numericLiteralInputKeyDown(event, { exponent, sign, replaceLeadingZero })',
+      paste: 'sanitizeNumericInput(candidateRawValue, { min, decimal, exponent, sign, replaceLeadingZero })',
+      change: 'sanitizeNumericInput(nextRawValue, { min, decimal, exponent, sign, replaceLeadingZero, previousValue })',
+      blur: 'trimNumericOnBlur(value, blurFlags)',
     },
   },
   {
@@ -108,8 +133,15 @@ const SCENARIOS: Scenario[] = [
       blur: {
         leadingZeros: false,
         leadingDecimalPoint: false,
+        trailingDecimalPoint: false,
         trailingFractionZeros: false,
       },
+    },
+    bindings: {
+      keydown: 'digitInputKeyDown(event)',
+      paste: 'sanitizeDigitsOnly(candidateRawValue)',
+      change: 'sanitizeDigitsOnly(nextRawValue)',
+      blur: 'trimNumericOnBlur(value, blurFlags)',
     },
   },
   {
@@ -128,8 +160,15 @@ const SCENARIOS: Scenario[] = [
       blur: {
         leadingZeros: false,
         leadingDecimalPoint: false,
+        trailingDecimalPoint: false,
         trailingFractionZeros: false,
       },
+    },
+    bindings: {
+      keydown: 'native text input',
+      paste: 'native paste',
+      change: 'raw value passthrough',
+      blur: 'raw value passthrough',
     },
   },
 ];
@@ -207,6 +246,10 @@ function buildKeyDownOptions(options: PlaygroundOptions) {
   };
 }
 
+function buildCandidateNextValue(rawValue: string, start: number, end: number, key: string): string {
+  return `${rawValue.slice(0, start)}${key}${rawValue.slice(end)}`;
+}
+
 function scenarioById(id: ScenarioKind): Scenario {
   return SCENARIOS.find((scenario) => scenario.id === id) ?? SCENARIOS[0];
 }
@@ -265,10 +308,19 @@ export default function App() {
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    const currentValue = event.currentTarget.value ?? '';
+    const start = event.currentTarget.selectionStart ?? currentValue.length;
+    const end = event.currentTarget.selectionEnd ?? currentValue.length;
+    const candidateNextValue = event.key.length === 1
+      ? buildCandidateNextValue(currentValue, start, end, event.key)
+      : currentValue;
+
     if (scenarioId === 'text') {
       setKeydownReport({
         label: 'allowed',
         detail: `key "${event.key}" on "${event.currentTarget.value}"`,
+        candidateNextValue,
+        reason: 'text scenario does not apply numeric key filtering',
       });
       return;
     }
@@ -284,6 +336,8 @@ export default function App() {
     setKeydownReport({
       label: event.defaultPrevented ? 'blocked' : 'allowed',
       detail: `key "${event.key}" on "${event.currentTarget.value}"`,
+      candidateNextValue,
+      reason: event.defaultPrevented ? 'candidate next value is rejected by current keydown progress rule' : 'candidate next value passed current keydown progress rule',
     });
   };
 
@@ -304,6 +358,8 @@ export default function App() {
     setPasteReport({
       label: sanitizedVal === '' ? 'blocked' : 'allowed',
       detail: `"${pastedText}" -> "${sanitizedVal}"`,
+      candidateNextValue: candidateRawValue,
+      reason: sanitizedVal === '' ? 'sanitize result is empty, so paste is prevented' : 'sanitize result is non-empty, so paste is allowed',
     });
   };
 
@@ -451,6 +507,14 @@ export default function App() {
             <label className="toggle">
               <input
                 type="checkbox"
+                checked={controls.blur.trailingDecimalPoint}
+                onChange={(event) => setBlurFlag('trailingDecimalPoint', event.target.checked)}
+              />
+              <span>trim trailing decimal point</span>
+            </label>
+            <label className="toggle">
+              <input
+                type="checkbox"
                 checked={controls.blur.trailingFractionZeros}
                 onChange={(event) => setBlurFlag('trailingFractionZeros', event.target.checked)}
               />
@@ -501,49 +565,53 @@ export default function App() {
 
         <aside className="panel output-panel">
           <div className="panel-header">
-            <h2>Live output</h2>
-            <p>See both the raw event value and the controlled value path.</p>
+            <h2>QA Checklist</h2>
+            <p>Use this panel to confirm what the next candidate value was, whether it was blocked, and what each stage returned.</p>
           </div>
 
           <div className="metric">
-            <span className="metric-label">active scenario</span>
+            <span className="metric-label">check 1. active scenario</span>
             <code>{activeScenario.id}</code>
           </div>
 
           <div className="metric">
-            <span className="metric-label">raw value</span>
+            <span className="metric-label">check 2. raw value</span>
             <code>{rawValue || '""'}</code>
           </div>
 
           <div className="metric">
-            <span className="metric-label">input rendered value</span>
+            <span className="metric-label">check 3. input rendered value</span>
             <code>{inputValue || '""'}</code>
           </div>
 
           <div className="metric">
-            <span className="metric-label">keydown</span>
+            <span className="metric-label">check 4. keydown result</span>
             <strong className={`status status-${keydownReport.label}`}>{keydownReport.label}</strong>
             <code>{keydownReport.detail}</code>
+            <code>candidate next value: {keydownReport.candidateNextValue || '""'}</code>
+            <code>reason: {keydownReport.reason || '""'}</code>
           </div>
 
           <div className="metric">
-            <span className="metric-label">paste</span>
+            <span className="metric-label">check 5. paste result</span>
             <strong className={`status status-${pasteReport.label}`}>{pasteReport.label}</strong>
             <code>{pasteReport.detail}</code>
+            <code>candidate next value: {pasteReport.candidateNextValue || '""'}</code>
+            <code>reason: {pasteReport.reason || '""'}</code>
           </div>
 
           <div className="metric">
-            <span className="metric-label">sanitize after change</span>
+            <span className="metric-label">check 6. sanitize after change</span>
             <code>{sanitizeResult || '""'}</code>
           </div>
 
           <div className="metric">
-            <span className="metric-label">blur result</span>
+            <span className="metric-label">check 7. blur result</span>
             <code>{blurResult || '""'}</code>
           </div>
 
           <div className="metric">
-            <span className="metric-label">preview from current raw</span>
+            <span className="metric-label">check 8. preview from current raw</span>
             <code>{JSON.stringify(livePreview, null, 2)}</code>
           </div>
         </aside>
