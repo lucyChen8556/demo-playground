@@ -8,6 +8,7 @@ export type NumericSanitizeOptions = BaseKeyDownOptions & {
 export type NumericBlurTrimOptions = {
   leadingZeros?: boolean;
   leadingDecimalPoint?: boolean;
+  trailingDecimalPoint?: boolean;
   trailingFractionZeros?: boolean;
 };
 
@@ -69,8 +70,17 @@ function trimTrailingFractionZeros(input: string): string {
   return input.replace(/(\.\d*?[1-9])0+([eE].*)?$/, '$1$2').replace(/\.0*([eE].*)?$/, '$1');
 }
 
+function trimTrailingDecimalPoint(input: string): string {
+  return input.replace(/\.([eE].*)?$/, '$1');
+}
+
 export function trimNumericInputOnBlur(input: string, options: NumericBlurTrimOptions = {}): string {
-  const { leadingZeros = false, leadingDecimalPoint = false, trailingFractionZeros = false } = options;
+  const {
+    leadingZeros = false,
+    leadingDecimalPoint = false,
+    trailingDecimalPoint = false,
+    trailingFractionZeros = false,
+  } = options;
 
   let normalizedInput = String(input ?? '');
 
@@ -90,11 +100,16 @@ export function trimNumericInputOnBlur(input: string, options: NumericBlurTrimOp
     normalizedInput = trimTrailingFractionZeros(normalizedInput);
   }
 
+  if (trailingDecimalPoint) {
+    normalizedInput = trimTrailingDecimalPoint(normalizedInput);
+  }
+
   return normalizedInput;
 }
 
 export function trimLeadingZerosOnBlur(input: string): string {
   return trimNumericInputOnBlur(input, {
+    trailingDecimalPoint: true,
     leadingDecimalPoint: true,
     leadingZeros: true,
   });
